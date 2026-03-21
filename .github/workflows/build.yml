@@ -10,14 +10,23 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       
+      - name: Cache Theos
+        uses: actions/cache@v3
+        with:
+          path: ~/theos
+          key: ${{ runner.os }}-theos
+      
       - name: Setup Theos
         run: |
-          bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-          echo "THEOS=/Users/runner/theos" >> $GITHUB_ENV
+          export THEOS=~/theos
+          if [ ! -d "$THEOS" ]; then
+            git clone --recursive https://github.com/theos/theos.git $THEOS
+          fi
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
       
       - name: Build Tweak
         run: |
-          export THEOS=/Users/runner/theos
+          export THEOS=~/theos
           make package
       
       - name: Upload Package
