@@ -1,7 +1,0 @@
-Package: com.yourname.remotecamtweak
-Name: RemoteCamTweak
-Version: 0.1.0
-Description: 快手远程人脸验证 Tweak
-Author: Tech Advisor
-Section: Tweaks
-Architecture: iphoneos-arm64
