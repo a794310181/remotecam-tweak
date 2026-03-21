@@ -19,7 +19,7 @@ jobs:
         export THEOS=/Users/runner/theos
         make package
     - name: Upload Package
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: RemoteCamTweak-deb
         path: packages/*.deb
