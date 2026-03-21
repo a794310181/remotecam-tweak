@@ -1,33 +1,34 @@
 name: Build RemoteCamTweak
 
 on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+push:
+branches: [ main ]
+workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Fix line endings
-      run: |
-        # 修复 Windows 换行符
-        find . -name "control" -o -name "Makefile" -o -name "*.xm" | xargs sed -i 's/\r$//'
-    
-    - name: Setup Theos
-      run: |
-        bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-        echo "THEOS=/Users/runner/theos" >> $GITHUB_ENV
-    
-    - name: Build Tweak
-      run: |
-        export THEOS=/Users/runner/theos
-        make package
-    
-    - name: Upload Package
-      uses: actions/upload-artifact@v4
-      with:
-        name: RemoteCamTweak-deb
-        path: packages/*.deb
+build:
+runs-on: macos-latest
+steps:
+- uses: actions/checkout@v3
+- name: Setup Theos
+run: |
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+echo "THEOS=/Users/runner/theos" >> $GITHUB_ENV
+- name: Build Tweak
+run: |
+export THEOS=/Users/runner/theos
+make package
+- name: Upload Package
+uses: actions/upload-artifact@v3
+with:
+name: RemoteCamTweak-deb
+path: packages/*.deb
+- name: Release
+if: github.event_name == 'push'
+uses: softprops/action-gh-release@v1
+with:
+files: packages/*.deb
+tag_name: v${{ github.run_number }}
+name: Build ${{ github.run_number }}
+env:
+GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
