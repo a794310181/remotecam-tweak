@@ -1,0 +1,7 @@
+Package: com.yourname.remotecamtweak
+Name: RemoteCamTweak
+Version: 0.1.0
+Description: Remote camera tweak
+Author: Tech
+Section: Tweaks
+Architecture: iphoneos-arm64
