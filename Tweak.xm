@@ -1,6 +1,4 @@
-// RemoteCamTweak - 修复版
-// 关键：Hook didOutputSampleBuffer 并替换帧
-
+// RemoteCamTweak v4.0 - 修复版
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -13,202 +11,135 @@ static UIImage *g_remoteFrame = nil;
 static NSDate *g_lastFrameTime = nil;
 static NSURLSession *g_session = nil;
 static NSTimer *g_pollTimer = nil;
+static BOOL g_isRunning = NO;
 
-// 原始代理
-static id<AVCaptureVideoDataOutputSampleBufferDelegate> g_origDelegate = nil;
-static dispatch_queue_t g_origQueue = NULL;
-
-// ============ 获取远程帧 ============
 static void fetchRemoteFrame() {
-NSString *url = [NSString stringWithFormat:@"%@/frame", kServerURL];
-NSURLRequest *req = [NSURLRequest requestWithURL:[NSURL URLWithString:url]
-cachePolicy:NSURLRequestReloadIgnoringCacheData
-timeoutInterval:2.0];
+    if (!g_isRunning) return;
+    NSString *url = [NSString stringWithFormat:@"%@/frame", kServerURL];
+    NSURLRequest *req = [NSURLRequest requestWithURL:[NSURL URLWithString:url] 
+                                          cachePolicy:NSURLRequestReloadIgnoringCacheData 
+                                      timeoutInterval:2.0];
+    NSURLSessionDataTask *task = [g_session dataTaskWithRequest:req 
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            if (!error && data && data.length > 100) {
+                UIImage *img = [UIImage imageWithData:data];
+                if (img) {
+                    @synchronized(g_remoteFrame) {
+                        g_remoteFrame = img;
+                        g_lastFrameTime = [NSDate date];
+                    }
+                }
+            }
+        }];
+    [task resume];
+}
 
-NSURLSessionDataTask *task = [g_session dataTaskWithRequest:req
-completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-if (!error && data && data.length > 100) {
-UIImage *img = [UIImage imageWithData:data];
-if (img) {
-@synchronized(g_remoteFrame) {
-g_remoteFrame = img;
-g_lastFrameTime = [NSDate date];
-}
-LOG(@"收到帧: %.0fx%.0f", img.size.width, img.size.height);
-}
-}
-}];
-[task resume];
-}
-
-// ============ 启动远程接收 ============
 static void startRemoteReceiving() {
-if (g_pollTimer) return;
-
-LOG(@"*** 启动远程视频接收 ***");
-
-NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-cfg.timeoutIntervalForRequest = 3.0;
-g_session = [NSURLSession sessionWithConfiguration:cfg];
-
-fetchRemoteFrame();
-
-g_pollTimer = [NSTimer scheduledTimerWithTimeInterval:0.1
-target:[NSBlockOperation blockOperationWithBlock:^{
-fetchRemoteFrame();
-}]
-selector:@selector(main)
-userInfo:nil
-repeats:YES];
+    if (g_isRunning) return;
+    g_isRunning = YES;
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    g_session = [NSURLSession sessionWithConfiguration:cfg];
+    fetchRemoteFrame();
+    g_pollTimer = [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(NSTimer *timer) {
+        fetchRemoteFrame();
+    }];
 }
 
-// ============ 图片转 SampleBuffer ============
-static CMSampleBufferRef CreateSampleBufferFromImage(UIImage *image) {
-if (!image) return NULL;
-
-CGSize size = CGSizeMake(640, 480);
-UIGraphicsBeginImageContext(size);
-[image drawInRect:CGRectMake(0, 0, size.width, size.height)];
-UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
-UIGraphicsEndImageContext();
-
-if (!resized) return NULL;
-
-CGImageRef cgImage = resized.CGImage;
-if (!cgImage) return NULL;
-
-size_t w = CGImageGetWidth(cgImage);
-size_t h = CGImageGetHeight(cgImage);
-
-CVPixelBufferRef pb = NULL;
-CVPixelBufferCreate(kCFAllocatorDefault, w, h, kCVPixelFormatType_32BGRA, NULL, &pb);
-if (!pb) return NULL;
-
-CVPixelBufferLockBaseAddress(pb, 0);
-void *pxdata = CVPixelBufferGetBaseAddress(pb);
-
-CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-CGContextRef ctx = CGBitmapContextCreate(pxdata, w, h, 8,
-CVPixelBufferGetBytesPerRow(pb),
-cs,
-kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
-CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), cgImage);
-CGContextRelease(ctx);
-CGColorSpaceRelease(cs);
-CVPixelBufferUnlockBaseAddress(pb, 0);
-
-CMSampleBufferRef sb = NULL;
-CMFormatDescriptionRef fd = NULL;
-CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, pb, &fd);
-
-CMSampleTimingInfo timing = {
-.duration = CMTimeMake(1, 30),
-.presentationTimeStamp = CMTimeMakeWithSeconds(CACurrentMediaTime(), 1000000),
-.decodeTimeStamp = kCMTimeInvalid
-};
-
-OSStatus err = CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, pb, fd, &timing, &sb);
-
-CVPixelBufferRelease(pb);
-if (fd) CFRelease(fd);
-
-return (err == noErr) ? sb : NULL;
+static CMSampleBufferRef CreateSampleBuffer(UIImage *image) {
+    if (!image) return NULL;
+    CGSize size = CGSizeMake(640, 480);
+    UIGraphicsBeginImageContext(size);
+    [image drawInRect:CGRectMake(0, 0, size.width, size.height)];
+    UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    if (!resized) resized = image;
+    CGImageRef cgImage = resized.CGImage;
+    if (!cgImage) return NULL;
+    size_t w = CGImageGetWidth(cgImage);
+    size_t h = CGImageGetHeight(cgImage);
+    CVPixelBufferRef pb = NULL;
+    CVReturn status = CVPixelBufferCreate(kCFAllocatorDefault, w, h, 
+                                          kCVPixelFormatType_32BGRA, NULL, &pb);
+    if (status != kCVReturnSuccess || !pb) return NULL;
+    CVPixelBufferLockBaseAddress(pb, 0);
+    void *pxdata = CVPixelBufferGetBaseAddress(pb);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(pxdata, w, h, 8, 
+                                              CVPixelBufferGetBytesPerRow(pb), 
+                                              cs, 
+                                              kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+    CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), cgImage);
+    CGContextRelease(ctx);
+    CGColorSpaceRelease(cs);
+    CVPixelBufferUnlockBaseAddress(pb, 0);
+    CMSampleBufferRef sb = NULL;
+    CMFormatDescriptionRef fd = NULL;
+    CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, pb, &fd);
+    CMSampleTimingInfo timing = {.duration = CMTimeMake(1, 30),
+        .presentationTimeStamp = CMTimeMakeWithSeconds(CACurrentMediaTime(), 600),
+        .decodeTimeStamp = kCMTimeInvalid};
+    OSStatus err = CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, pb, fd, &timing, &sb);
+    CVPixelBufferRelease(pb);
+    if (fd) CFRelease(fd);
+    return (err == noErr) ? sb : NULL;
 }
 
-// ============ 代理对象（关键！） ============
-@interface RemoteCamProxy : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
-@end
+static void (*orig_didOutputSampleBuffer)(id, SEL, AVCaptureOutput *, CMSampleBufferRef, AVCaptureConnection *) = NULL;
 
-@implementation RemoteCamProxy
-
-- (void)captureOutput:(AVCaptureOutput *)output
-didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
-fromConnection:(AVCaptureConnection *)connection {
-
-CMSampleBufferRef outputBuffer = sampleBuffer;
-BOOL needRelease = NO;
-
-// 获取远程帧
-UIImage *remoteImg = nil;
-@synchronized(g_remoteFrame) {
-remoteImg = g_remoteFrame;
-// 检查是否过期（3秒）
-if (g_lastFrameTime && -[g_lastFrameTime timeIntervalSinceNow] > 3.0) {
-remoteImg = nil;
-}
-}
-
-// 有远程帧就替换
-if (remoteImg) {
-CMSampleBufferRef remoteSB = CreateSampleBufferFromImage(remoteImg);
-if (remoteSB) {
-outputBuffer = remoteSB;
-needRelease = YES;
-LOG(@"✓ 替换为远程帧");
-}
-} else {
-LOG(@"✗ 无远程帧，用原帧");
+static void my_didOutputSampleBuffer(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBufferRef sampleBuffer, AVCaptureConnection *connection) {
+    UIImage *remoteImg = nil;
+    BOOL hasRemote = NO;
+    @synchronized(g_remoteFrame) {
+        remoteImg = g_remoteFrame;
+        if (remoteImg && g_lastFrameTime && -[g_lastFrameTime timeIntervalSinceNow] < 3.0) {
+            hasRemote = YES;
+        }
+    }
+    if (hasRemote) {
+        CMSampleBufferRef remoteSB = CreateSampleBuffer(remoteImg);
+        if (remoteSB) {
+            LOG(@"替换帧");
+            orig_didOutputSampleBuffer(self, _cmd, output, remoteSB, connection);
+            CFRelease(remoteSB);
+            return;
+        }
+    }
+    orig_didOutputSampleBuffer(self, _cmd, output, sampleBuffer, connection);
 }
 
-// 调用原始代理
-if (g_origDelegate && [g_origDelegate respondsToSelector:@selector(captureOutput:didOutputSampleBuffer:fromConnection:)]) {
-[g_origDelegate captureOutput:output didOutputSampleBuffer:outputBuffer fromConnection:connection];
+static void (*orig_setDelegate)(id, SEL, id, dispatch_queue_t) = NULL;
+
+static void my_setDelegate(id self, SEL _cmd, id<AVCaptureVideoDataOutputSampleBufferDelegate> delegate, dispatch_queue_t queue) {
+    LOG(@"Hook setSampleBufferDelegate: %@", NSStringFromClass([delegate class]));
+    startRemoteReceiving();
+    if (delegate) {
+        Class delegateClass = [delegate class];
+        SEL selector = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
+        Method origMethod = class_getInstanceMethod(delegateClass, selector);
+        if (origMethod) {
+            orig_didOutputSampleBuffer = (void *)method_getImplementation(origMethod);
+            method_setImplementation(origMethod, (IMP)my_didOutputSampleBuffer);
+            LOG(@"已Hook delegate");
+        }
+    }
+    orig_setDelegate(self, _cmd, delegate, queue);
 }
-
-if (needRelease && outputBuffer) {
-CFRelease(outputBuffer);
-}
-}
-
-- (void)captureOutput:(AVCaptureOutput *)output
-didDropSampleBuffer:(CMSampleBufferRef)sampleBuffer
-fromConnection:(AVCaptureConnection *)connection {
-if (g_origDelegate && [g_origDelegate respondsToSelector:@selector(captureOutput:didDropSampleBuffer:fromConnection:)]) {
-[g_origDelegate captureOutput:output didDropSampleBuffer:sampleBuffer fromConnection:connection];
-}
-}
-
-@end
-
-static RemoteCamProxy *g_proxy = nil;
-
-// ============ HOOK ============
-%hook AVCaptureVideoDataOutput
-
-- (void)setSampleBufferDelegate:(id<AVCaptureVideoDataOutputSampleBufferDelegate>)delegate
-queue:(dispatch_queue_t)queue {
-
-LOG(@"========================================");
-LOG(@"Hook setSampleBufferDelegate");
-LOG(@"原始代理: %@", NSStringFromClass([delegate class]));
-LOG(@"========================================");
-
-g_origDelegate = delegate;
-g_origQueue = queue;
-
-if (!g_proxy) {
-g_proxy = [[RemoteCamProxy alloc] init];
-}
-
-// 启动远程接收
-startRemoteReceiving();
-
-// 用自己的代理替换
-%orig(g_proxy, queue);
-
-LOG(@"代理替换完成");
-}
-
-%end
 
 %ctor {
-LOG(@"========================================");
-LOG(@"RemoteCamTweak 已加载");
-LOG(@"服务器: %@", kServerURL);
-LOG(@"========================================");
+    LOG(@"RemoteCamTweak v4.0 加载");
+    Class cls = objc_getClass("AVCaptureVideoDataOutput");
+    if (cls) {
+        SEL selector = @selector(setSampleBufferDelegate:queue:);
+        Method origMethod = class_getInstanceMethod(cls, selector);
+        if (origMethod) {
+            orig_setDelegate = (void *)method_getImplementation(origMethod);
+            method_setImplementation(origMethod, (IMP)my_setDelegate);
+            LOG(@"已Hook AVCaptureVideoDataOutput");
+        }
+    }
 }
 
 %dtor {
-LOG(@"RemoteCamTweak 卸载");
-[g_pollTimer invalidate];
+    g_isRunning = NO;
+    [g_pollTimer invalidate];
 }
