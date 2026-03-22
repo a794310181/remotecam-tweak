@@ -1,4 +1,5 @@
 name: Build RemoteCamTweak
+
 on:
   push:
     branches: [ main ]
@@ -6,35 +7,31 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-12
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Install ldid
-        run: |
-          brew install ldid
-      
-      - name: Cache Theos
-        uses: actions/cache@v3
-        with:
-          path: ~/theos
-          key: ${{ runner.os }}-theos
-      
-      - name: Setup Theos
-        run: |
-          export THEOS=~/theos
-          if [ ! -d "$THEOS" ]; then
-            git clone --recursive https://github.com/theos/theos.git $THEOS
-          fi
-          echo "THEOS=$THEOS" >> $GITHUB_ENV
-      
-      - name: Build Tweak
-        run: |
-          export THEOS=~/theos
-          make package
-      
-      - name: Upload Package
-        uses: actions/upload-artifact@v4
-        with:
-          name: RemoteCamTweak-deb
-          path: packages/*.deb
+    - uses: actions/checkout@v3
+    
+    - name: Setup Theos
+      run: |
+        git clone --recursive https://github.com/theos/theos.git $HOME/theos
+        echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+        
+    - name: Setup iOS SDK
+      run: |
+        curl -LO https://github.com/theos/sdks/archive/refs/heads/master.zip
+        unzip master.zip
+        mv sdks-master $HOME/theos/sdks
+        rm master.zip
+        
+    - name: Build
+      run: |
+        cd RemoteCamTweak
+        export ARCHS="arm64 arm64e"
+        make clean
+        make package FINALPACKAGE=1
+        
+    - name: Upload Package
+      uses: actions/upload-artifact@v3
+      with:
+        name: RemoteCamTweak
+        path: RemoteCamTweak/packages/*.deb
