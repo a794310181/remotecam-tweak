@@ -1,4 +1,4 @@
-// RemoteCamTweak v4.0 - 修复版
+// RemoteCamTweak v4.1 - 修复编译错误
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -84,7 +84,9 @@ static CMSampleBufferRef CreateSampleBuffer(UIImage *image) {
     return (err == noErr) ? sb : NULL;
 }
 
+// 正确的函数指针类型
 static void (*orig_didOutputSampleBuffer)(id, SEL, AVCaptureOutput *, CMSampleBufferRef, AVCaptureConnection *) = NULL;
+static void (*orig_setDelegate)(id, SEL, id, dispatch_queue_t) = NULL;
 
 static void my_didOutputSampleBuffer(id self, SEL _cmd, AVCaptureOutput *output, CMSampleBufferRef sampleBuffer, AVCaptureConnection *connection) {
     UIImage *remoteImg = nil;
@@ -107,8 +109,6 @@ static void my_didOutputSampleBuffer(id self, SEL _cmd, AVCaptureOutput *output,
     orig_didOutputSampleBuffer(self, _cmd, output, sampleBuffer, connection);
 }
 
-static void (*orig_setDelegate)(id, SEL, id, dispatch_queue_t) = NULL;
-
 static void my_setDelegate(id self, SEL _cmd, id<AVCaptureVideoDataOutputSampleBufferDelegate> delegate, dispatch_queue_t queue) {
     LOG(@"Hook setSampleBufferDelegate: %@", NSStringFromClass([delegate class]));
     startRemoteReceiving();
@@ -117,7 +117,8 @@ static void my_setDelegate(id self, SEL _cmd, id<AVCaptureVideoDataOutputSampleB
         SEL selector = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
         Method origMethod = class_getInstanceMethod(delegateClass, selector);
         if (origMethod) {
-            orig_didOutputSampleBuffer = (void *)method_getImplementation(origMethod);
+            // 修复：使用正确的类型转换
+            orig_didOutputSampleBuffer = (void (*)(id, SEL, AVCaptureOutput *, CMSampleBufferRef, AVCaptureConnection *))method_getImplementation(origMethod);
             method_setImplementation(origMethod, (IMP)my_didOutputSampleBuffer);
             LOG(@"已Hook delegate");
         }
@@ -126,13 +127,14 @@ static void my_setDelegate(id self, SEL _cmd, id<AVCaptureVideoDataOutputSampleB
 }
 
 %ctor {
-    LOG(@"RemoteCamTweak v4.0 加载");
+    LOG(@"RemoteCamTweak v4.1 加载");
     Class cls = objc_getClass("AVCaptureVideoDataOutput");
     if (cls) {
         SEL selector = @selector(setSampleBufferDelegate:queue:);
         Method origMethod = class_getInstanceMethod(cls, selector);
         if (origMethod) {
-            orig_setDelegate = (void *)method_getImplementation(origMethod);
+            // 修复：使用正确的类型转换
+            orig_setDelegate = (void (*)(id, SEL, id, dispatch_queue_t))method_getImplementation(origMethod);
             method_setImplementation(origMethod, (IMP)my_setDelegate);
             LOG(@"已Hook AVCaptureVideoDataOutput");
         }
